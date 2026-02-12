@@ -54,6 +54,6 @@ bash scripts/orchestrator.sh
 
 ## 注意事项
 
-1. 当前仓库主流程默认未直接产出 `outputs/daily_result.json` / `outputs/daily_report.md`，请在你的 daily 流程里加导出步骤。
+1. 当前已在 `main.py` 中新增自动导出：默认会生成 `outputs/daily_result.json` 和 `outputs/daily_report.md`。可通过 `EXPORT_INTEGRATION_OUTPUTS=false` 关闭；可通过 `INTEGRATION_OUTPUT_DIR` 改目录。
 2. `DEXTER_BATCH_CMD` 需要与你本地 dexter 实际 CLI 对齐。
-3. 本 MVP 目标是“可跑通编排”，不是改动你现有分析核心逻辑。
+3. 本 MVP 目标是“可跑通编排”，不改动既有分析核心逻辑。

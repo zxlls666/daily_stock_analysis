@@ -37,11 +37,13 @@ if [[ -n "${DEXTER_BATCH_CMD:-}" ]]; then
   echo "[INFO] 执行: $CMD"
   bash -lc "$CMD" || {
     echo "[WARN] dexter 深挖失败，写入降级结果"
-    echo '{"date":"'"$(date +%F)'"","results":[]}' > "$DEEP_JSON"
+    TODAY="$(date +%F)"
+    printf '{"date":"%s","results":[]}\n' "$TODAY" > "$DEEP_JSON"
   }
 else
   echo "[WARN] 未设置 DEXTER_BATCH_CMD，写入空深挖结果（降级）"
-  echo '{"date":"'"$(date +%F)'"","results":[]}' > "$DEEP_JSON"
+  TODAY="$(date +%F)"
+  printf '{"date":"%s","results":[]}\n' "$TODAY" > "$DEEP_JSON"
 fi
 
 echo "[4/5] 合并统一报告"

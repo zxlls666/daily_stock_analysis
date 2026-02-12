@@ -36,6 +36,7 @@ if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").low
     os.environ["https_proxy"] = proxy_url
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -120,6 +121,43 @@ def setup_logging(debug: bool = False, log_dir: str = "./logs") -> None:
 
 
 logger = logging.getLogger(__name__)
+
+
+def export_integration_outputs(
+    output_dir: Path,
+    results,
+    daily_report_md: str,
+    market_report: str,
+) -> None:
+    """导出融合编排所需的标准输出文件。"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result_items = [r.to_dict() for r in (results or [])]
+    result_payload = {
+        "generated_at": datetime.now().isoformat(),
+        "results": result_items,
+    }
+
+    daily_result_json = output_dir / "daily_result.json"
+    daily_result_json.write_text(
+        json.dumps(result_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report_parts = []
+    if daily_report_md and daily_report_md.strip():
+        report_parts.append(daily_report_md.strip())
+
+    if market_report and market_report.strip():
+        report_parts.append("\n\n---\n\n# 📈 大盘复盘\n\n" + market_report.strip())
+
+    daily_report_file = output_dir / "daily_report.md"
+    daily_report_file.write_text(
+        ("\n".join(report_parts).strip() + "\n") if report_parts else "",
+        encoding="utf-8",
+    )
+
+    logger.info(f"融合输出已写入: {daily_result_json}, {daily_report_file}")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -266,7 +304,20 @@ def run_full_analysis(
                     f"{emoji} {r.name}({r.code}): {r.operation_advice} | "
                     f"评分 {r.sentiment_score} | {r.trend_prediction}"
                 )
-        
+
+        # 导出融合编排所需文件（默认开启，可通过 EXPORT_INTEGRATION_OUTPUTS=false 关闭）
+        if os.getenv("EXPORT_INTEGRATION_OUTPUTS", "true").lower() != "false":
+            output_dir = Path(os.getenv("INTEGRATION_OUTPUT_DIR", "outputs"))
+            daily_report_md = ""
+            if results:
+                daily_report_md = pipeline.notifier.generate_dashboard_report(results)
+            export_integration_outputs(
+                output_dir=output_dir,
+                results=results,
+                daily_report_md=daily_report_md,
+                market_report=market_report or "",
+            )
+
         logger.info("\n任务执行完成")
 
         # === 新增：生成飞书云文档 ===
