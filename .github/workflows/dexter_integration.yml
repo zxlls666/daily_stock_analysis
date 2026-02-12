@@ -1,0 +1,176 @@
+name: Dexter 融合编排
+
+on:
+  schedule:
+    # 工作日北京时间 18:20（UTC 10:20）
+    - cron: '20 10 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'daily 运行模式'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - market-only
+          - stocks-only
+      topn:
+        description: '导出的 TopN 候选数量'
+        required: false
+        default: '3'
+      dexter_batch_cmd:
+        description: '可选：覆盖 DEXTER_BATCH_CMD（示例：bun run src/index.tsx --batch {candidates} --out {deep}）'
+        required: false
+        default: ''
+
+concurrency:
+  group: dexter-integration
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # 运行参数
+      TOPN: ${{ github.event.inputs.topn || vars.DEXTER_TOPN || '3' }}
+      OUT_DIR: outputs
+      EXPORT_INTEGRATION_OUTPUTS: 'true'
+      INTEGRATION_OUTPUT_DIR: outputs
+      MODE: ${{ github.event.inputs.mode || 'full' }}
+      # dexter 命令优先级：手动输入 > vars > secrets
+      DEXTER_BATCH_CMD: ${{ github.event.inputs.dexter_batch_cmd || vars.DEXTER_BATCH_CMD || secrets.DEXTER_BATCH_CMD }}
+
+      # ===== 与 daily_analysis.yml 对齐的关键环境 =====
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-2.5-flash' }}
+      GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.0-flash' }}
+      GEMINI_REQUEST_DELAY: '3.0'
+
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+      BOCHA_API_KEYS: ${{ secrets.BOCHA_API_KEYS }}
+      TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+      SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
+
+      WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+      WECHAT_MSG_TYPE: ${{ vars.WECHAT_MSG_TYPE || secrets.WECHAT_MSG_TYPE || 'markdown' }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
+      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+      EMAIL_RECEIVERS: ${{ vars.EMAIL_RECEIVERS || secrets.EMAIL_RECEIVERS }}
+      PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+      PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      CUSTOM_WEBHOOK_URLS: ${{ secrets.CUSTOM_WEBHOOK_URLS }}
+      CUSTOM_WEBHOOK_BEARER_TOKEN: ${{ secrets.CUSTOM_WEBHOOK_BEARER_TOKEN }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_MAIN_CHANNEL_ID: ${{ secrets.DISCORD_MAIN_CHANNEL_ID }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_FOLDER_TOKEN: ${{ secrets.FEISHU_FOLDER_TOKEN }}
+
+      STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
+      REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
+      SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
+      MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
+      ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
+
+      LOG_LEVEL: INFO
+      MAX_WORKERS: 3
+      ENABLE_CHIP_DISTRIBUTION: 'false'
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 如需 bun 则安装
+        if: ${{ env.DEXTER_BATCH_CMD != '' && contains(env.DEXTER_BATCH_CMD, 'bun ') }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: 执行融合编排（daily + topn + dexter + merge）
+        run: |
+          mkdir -p data logs reports outputs
+          echo "MODE=$MODE"
+          echo "TOPN=$TOPN"
+
+          if [ "$MODE" = "market-only" ]; then
+            python main.py --market-review
+          elif [ "$MODE" = "stocks-only" ]; then
+            python main.py --no-market-review
+          else
+            python main.py
+          fi
+
+          bash scripts/orchestrator.sh
+
+      - name: 产物校验
+        run: |
+          test -f outputs/daily_result.json
+          test -f outputs/daily_report.md
+          test -f outputs/candidates.json
+          test -f outputs/deep_dive_result.json
+          test -f outputs/final_report.md
+
+      - name: 上传融合产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dexter-integration-${{ github.run_number }}
+          path: |
+            outputs/
+            reports/
+            logs/
+          retention-days: 30
+
+      - name: 生成运行摘要
+        if: always()
+        run: |
+          {
+            echo "## Dexter Integration MVP"
+            echo ""
+            echo "- Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "- Mode: $MODE"
+            echo "- TopN: $TOPN"
+            if [ -n "${DEXTER_BATCH_CMD:-}" ]; then
+              echo "- Dexter: enabled"
+            else
+              echo "- Dexter: fallback (empty deep dive)"
+            fi
+            echo ""
+            echo "### Outputs"
+            ls -lah outputs || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 可选 Webhook 通知
+        if: always() && secrets.DEXTER_NOTIFY_WEBHOOK_URL != ''
+        env:
+          DEXTER_NOTIFY_WEBHOOK_URL: ${{ secrets.DEXTER_NOTIFY_WEBHOOK_URL }}
+        run: |
+          STATUS="${{ job.status }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT="[Dexter Integration] ${STATUS} | ${RUN_URL}"
+          curl -sS -X POST "$DEXTER_NOTIFY_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"${TEXT}\"}" || true
